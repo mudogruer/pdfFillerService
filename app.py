@@ -175,7 +175,6 @@ def atkFillPdfFromData(obj):
 		for k, v in field_values.items():
 			if k not in image_items and isinstance(v, dict) and 'source' in v:
 				image_items[k] = v
-				print(f"DEBUG: Found image in data section: {k}")
 
 	if not pdf_input:
 		return {"report": "error", "message": "PDF 'pdf' or 'file' key required.", "code": "ATKPDF-01"}
@@ -244,19 +243,15 @@ def atkFillPdfFromData(obj):
 
 				# 2. Image Placement on existing fields
 				if field_name in image_items:
-					print(f"DEBUG: Processing image for existing field '{field_name}'")
 					try:
 						cfg = image_items[field_name]
 						src = pxJson(cfg, 'source') or pxJson(cfg, 'data') or pxJson(cfg, 'url')
-						print(f"DEBUG: Image source type: {type(src)}, length: {len(str(src)) if src else 0}")
 						if not src: 
-							print(f"DEBUG: No source found for field '{field_name}'")
 							continue
 
 						img_bytes = None
 						if isinstance(src, (bytes, bytearray)):
 							img_bytes = bytes(src)
-							print(f"DEBUG: Using bytes source, length: {len(img_bytes)}")
 						elif isinstance(src, str):
 							src_clean = src.strip()
 							# normalize bare www.* to https://
@@ -269,11 +264,7 @@ def atkFillPdfFromData(obj):
 									resp = requests.get(src_clean, timeout=10)
 									if resp.ok and len(resp.content) <= max_bytes:
 										img_bytes = resp.content
-										print(f"DEBUG: Downloaded image from URL, length: {len(img_bytes)}")
-									else:
-										print(f"DEBUG: URL download failed or too large")
-								except Exception as e:
-									print(f"DEBUG: URL download error: {e}")
+								except Exception:
 									img_bytes = None
 							else: # Assume base64 or data-url
 								img_bytes = _decode_b64_bytes(src_clean)
@@ -283,48 +274,30 @@ def atkFillPdfFromData(obj):
 										img_bytes = base64.b64decode(src_clean + ('=' * (4 - mb) if mb else ''))
 									except Exception:
 										img_bytes = None
-								if img_bytes:
-									print(f"DEBUG: Decoded base64/data-url, length: {len(img_bytes)}")
-								else:
-									print(f"DEBUG: Failed to decode base64/data-url")
 						
 						if img_bytes:
-							print(f"DEBUG: Image bytes length: {len(img_bytes)}")
 							# Use the widget's rectangle for perfect placement
 							rect = widget.rect
-							print(f"DEBUG: Widget rect: {rect}")
 							preserve = pxJson(cfg, 'preserveAspect')
 							if preserve is None:
 								preserve = pxJson(cfg, 'keepProportion')
 							keep_prop = True if preserve is None else bool(preserve)
 							try:
 								page.insert_image(rect, stream=img_bytes, keep_proportion=keep_prop, overlay=True)
-								print(f"DEBUG: Image inserted successfully for field '{field_name}'")
-							except Exception as img_err:
-								print(f"DEBUG: Image insert failed for field '{field_name}': {img_err}")
-								# Try without keep_proportion for older PyMuPDF versions
-								try:
-									page.insert_image(rect, stream=img_bytes, overlay=True)
-									print(f"DEBUG: Image inserted without keep_proportion for field '{field_name}'")
-								except Exception as img_err2:
-									print(f"DEBUG: Image insert failed completely for field '{field_name}': {img_err2}")
-						else:
-							print(f"DEBUG: No image bytes found for field '{field_name}'")
+							except Exception:
+								pass
+					except Exception:
+						pass
 
-					except Exception as e:
-						return {'report':'error','message':'PDF processing failed','code':'ATKPDF-04'}
-			
-			# 3. Process images that don't match any existing fields (place at coordinates)
+			# 3. Process images that don't match any existing fields (place at coordinates or anchor)
 			for field_name, cfg in image_items.items():
 				# Skip if already processed above
 				if any(w.field_name == field_name for w in _page_widgets):
 					continue
-					
-				print(f"DEBUG: Processing standalone image for field '{field_name}'")
 				try:
 					src = pxJson(cfg, 'source') or pxJson(cfg, 'data') or pxJson(cfg, 'url')
-					if not src: continue
-					
+					if not src: 
+						continue
 					img_bytes = None
 					if isinstance(src, (bytes, bytearray)):
 						img_bytes = bytes(src)
@@ -349,9 +322,7 @@ def atkFillPdfFromData(obj):
 									img_bytes = base64.b64decode(src_clean + ('=' * (4 - mb) if mb else ''))
 								except Exception:
 									img_bytes = None
-					
 					if img_bytes:
-						# Determine rect: use anchor if provided, else x/y/width/height
 						anchor_name = pxJson(cfg, 'anchor')
 						anchor_rect = None
 						if anchor_name:
@@ -359,11 +330,6 @@ def atkFillPdfFromData(obj):
 								if getattr(w, 'field_name', None) == anchor_name:
 									anchor_rect = getattr(w, 'rect', None)
 									break
-							if anchor_rect:
-								print(f"DEBUG: Using anchor '{anchor_name}' rect {anchor_rect} for image '{field_name}'")
-							else:
-								print(f"DEBUG: Anchor '{anchor_name}' not found for image '{field_name}'")
-						
 						fit_to_anchor = bool(pxJson(cfg, 'fitToAnchor'))
 						if anchor_rect and fit_to_anchor:
 							rect = anchor_rect
@@ -373,28 +339,17 @@ def atkFillPdfFromData(obj):
 							width = pxJson(cfg, 'width') or (float(anchor_rect.width) if anchor_rect else 100)
 							height = pxJson(cfg, 'height') or (float(anchor_rect.height) if anchor_rect else 100)
 							rect = fitz.Rect(x, y, x + width, y + height)
-						print(f"DEBUG: Placing standalone image at rect: {rect}")
-						
 						preserve = pxJson(cfg, 'preserveAspect')
 						if preserve is None:
 							preserve = pxJson(cfg, 'keepProportion')
 						keep_prop = True if preserve is None else bool(preserve)
-						
 						try:
 							page.insert_image(rect, stream=img_bytes, keep_proportion=keep_prop, overlay=True)
-							print(f"DEBUG: Standalone image inserted successfully for field '{field_name}'")
-						except Exception as img_err:
-							print(f"DEBUG: Standalone image insert failed for field '{field_name}': {img_err}")
-							try:
-								page.insert_image(rect, stream=img_bytes, overlay=True)
-								print(f"DEBUG: Standalone image inserted without keep_proportion for field '{field_name}'")
-							except Exception as img_err2:
-								print(f"DEBUG: Standalone image insert failed completely for field '{field_name}': {img_err2}")
-					else:
-						print(f"DEBUG: No image bytes found for standalone field '{field_name}'")
-				except Exception as e:
-					print(f"DEBUG: Error processing standalone image '{field_name}': {e}")
-			
+						except Exception:
+							pass
+				except Exception:
+					pass
+
 			# 4. Flatten widgets on this page if requested (remove interactivity)
 			if form_flatten and _page_widgets:
 				for _w in _page_widgets:
@@ -536,8 +491,7 @@ def index():
 					</div>
 					<div style="display:flex;gap:10px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #1f2937">
 						<button class="btn btn-outline" id="btnReset">Reset</button>
-						<button class="btn btn-outline" id="btnDebug">Debug</button>
-						<button class="btn btn-primary" id="btnShow">Show PDF</button>
+						<button class="btn btn-outline" id="btnShow">Show PDF</button>
 						<a id="btnDownload" class="btn btn-outline" download="filled.pdf" href="#" style="display:none">Download</a>
 					</div>
 					<iframe id="preview" class="preview"></iframe>
@@ -551,7 +505,6 @@ def index():
 				const btnAddImg = document.getElementById('btnAddImg');
 				const btnShow = document.getElementById('btnShow');
 				const btnReset = document.getElementById('btnReset');
-				const btnDebug = document.getElementById('btnDebug');
 				const pdfInput = document.getElementById('pdfFile');
 				const optReadonly = document.getElementById('optReadonly');
 				const optFlatten = document.getElementById('optFlatten');
@@ -769,58 +722,7 @@ def index():
 					}
 				}
 
-				async function debugInfo() {
-					const file = pdfInput.files && pdfInput.files[0];
-					if (!file) { alert('Please select a PDF.'); return; }
-					const form = new FormData();
-					form.append('pdf', file);
-					form.append('fields', JSON.stringify(collectFields()));
-					if (imgRowsEl) {
-						const items = {};
-						const toB64 = f => new Promise((resolve,reject)=>{ const r = new FileReader(); r.onload=()=>resolve(String(r.result)); r.onerror=reject; r.readAsDataURL(f); });
-						const promises = [];
-						for (const row of imgRowsEl.children) {
-							const inputs = row.querySelectorAll('input,textarea');
-							const idEl = inputs[0];
-							const srcEl = inputs[1];
-							const fileEl = inputs[2];
-							const keepCb = inputs[3];
-							const maxIn = inputs[4];
-							const xIn = inputs[5];
-							const yIn = inputs[6];
-							const wIn = inputs[7];
-							const hIn = inputs[8];
-							const anchorIn = inputs[9];
-							const fitAnchorCb = inputs[10];
-							const field = (idEl && idEl.value || '').trim();
-							if (!field) continue;
-							items[field] = { source: (srcEl && srcEl.value || '').trim(), preserveAspect: keepCb ? !!keepCb.checked : true };
-							if (maxIn && maxIn.value) items[field].maxBytes = Number(maxIn.value) || maxIn.value;
-							if (xIn && xIn.value) items[field].x = Number(xIn.value) || 50;
-							if (yIn && yIn.value) items[field].y = Number(yIn.value) || 50;
-							if (wIn && wIn.value) items[field].width = Number(wIn.value) || 100;
-							if (hIn && hIn.value) items[field].height = Number(hIn.value) || 100;
-							if (anchorIn && anchorIn.value) items[field].anchor = anchorIn.value.trim();
-							if (fitAnchorCb) items[field].fitToAnchor = !!fitAnchorCb.checked;
-							if (fileEl && fileEl.files && fileEl.files[0]) {
-								promises.push(toB64(fileEl.files[0]).then(b64 => { items[field].source = String(b64); }));
-							}
-						}
-						await Promise.all(promises);
-						form.append('images', JSON.stringify(items));
-					}
-					try {
-						const res = await fetch('/api/debug', { method: 'POST', body: form });
-						const data = await res.json();
-						console.log('DEBUG INFO:', data);
-						alert('Debug info logged to console. Check browser dev tools (F12)');
-					} catch (err) {
-						alert('Debug failed: ' + (err && err.message ? err.message : err));
-					}
-				}
-
 				pdfInput.addEventListener('change', fetchFields);
-				btnDebug.addEventListener('click', debugInfo);
 				btnShow.addEventListener('click', showPdf);
 				createRow();
 			</script>
@@ -896,43 +798,8 @@ def api_fields():
 		return jsonify({"fields": []})
 
 
-@app.route('/api/debug', methods=['POST'])
-def api_debug():
-	"""Debug endpoint to test image processing without PDF generation"""
-	try:
-		obj = pxConvertRequest()
-		if not obj or not pxJson(obj, 'pdf'):
-			return jsonify({"error": "Missing PDF upload."}), 400
-		
-		import fitz
-		pdf_bytes = base64.b64decode(obj['pdf'])
-		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-		
-		debug_info = {
-			"total_pages": len(doc),
-			"widgets": [],
-			"image_items": pxJson(obj, 'images') or {}
-		}
-		
-		for page_num, page in enumerate(doc):
-			widgets = list(page.widgets() or [])
-			for widget in widgets:
-				field_name = getattr(widget, 'field_name', None)
-				field_type = getattr(widget, 'field_type', None)
-				rect = getattr(widget, 'rect', None)
-				debug_info["widgets"].append({
-					"page": page_num + 1,
-					"field_name": field_name,
-					"field_type": int(field_type) if isinstance(field_type, int) else None,
-					"rect": str(rect) if rect else None,
-					"has_image": field_name in debug_info["image_items"]
-				})
-		
-		doc.close()
-		return jsonify(debug_info)
-	except Exception as e:
-		return jsonify({"error": str(e)}), 500
-
 if __name__ == '__main__':
-	# Run: python app.py, then open http://127.0.0.1:5000
-	app.run(host='127.0.0.1', port=5000, debug=True
+	import os
+	port = int(os.environ.get('PORT', '5000'))
+	host = os.environ.get('HOST', '0.0.0.0')
+	app.run(host=host, port=port)
